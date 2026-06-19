@@ -1,0 +1,378 @@
+---
+title: "500773942"
+author: "500773942"
+date: "2025-11-23"
+output:
+  html_document: default
+  pdf_document: default
+---
+
+#### Purpose of the program :
+
+##### 1) Decomposing the data set into dimension specific tables, ensuring each table focuses on distinct facet of data.
+
+##### 2) Deliver user-defined output by filtering the data set as per customer's requested attributes.
+
+##### 3) Provide client with visualization insights centered on revenue, for designing effective marketing campaigns .
+
+```{r}
+# installing all the required packages for completion of the program.
+
+library(tidyverse)
+library(lubridate)
+library(dplyr)
+library(tidyr)
+library(lubridate)
+library(ggplot2)
+library(scales)
+library(patchwork)
+```
+
+```{r}
+raw_orders_coffee <- read.csv(file.path("D:", "Git Demo", "first_repo", "raw_orders_coffee.csv"))
+
+date_cols = c('Date','Customer_DOB')
+
+for (i in date_cols){
+  raw_orders_coffee[[i]] <- as.Date(raw_orders_coffee[[i]],format = "%d/%m/%Y")
+}
+head(raw_orders_coffee,10)
+
+
+
+
+
+```
+
+### Task 1(a) (Extracting Customer Data frame)
+
+```{r}
+
+#raw_orders_coffee <- read.csv("raw_orders_coffee.csv")
+#customer dataframe including both members and non-member for single Customer ID
+
+Customer <- raw_orders_coffee %>%
+  distinct(Customer_ID,Customer_Membership_Status,.keep_all = TRUE) %>% #both members and non-members considered
+  select(Customer_ID,Customer,Customer_DOB,Customer_Membership_Status)
+Customer <- Customer[order(Customer$Customer_ID),]
+Customer <- separate(data = Customer,col = "Customer",
+                     into = c("First_Name","Last_Name"),extra = "merge")
+Customer$Customer_DOB<- as.Date(Customer$Customer_DOB,format = "%Y-%M-%D")
+benchmark <- as.Date("2025-08-31")
+difference <-  as.numeric(benchmark - Customer$Customer_DOB)
+Customer$Age <- floor(difference/365)
+head(Customer,10)
+
+#exporting the dataframe to local file.
+#write.csv(Customer,file = "D:\\Bangor University\\Courses\\Coding for Business Application\\End Project\\Code Exports\\Customer.csv",row.names = FALSE)
+
+#Customer dataframe including only unique membership for sigle Customer ID
+Unique_Customer <- raw_orders_coffee %>%
+  distinct(Customer_ID,.keep_all = TRUE) %>% 
+  select(Customer_ID,Customer,Customer_DOB,Customer_Membership_Status)
+Unique_Customer <- Unique_Customer[order(Unique_Customer$Customer_ID),]
+Unique_Customer <- separate(data = Unique_Customer,col = "Customer",into = c("First_Name","Last_Name"),extra = "merge")
+Unique_Customer$Customer_DOB<- as.Date(Unique_Customer$Customer_DOB,format = "%Y-%m-%d")
+benchmark <- as.Date("2025-08-31")
+difference <-  as.numeric(benchmark - Unique_Customer$Customer_DOB)
+Unique_Customer$Age <- floor(difference/365)
+head(Unique_Customer,10)
+```
+
+### Task 1(b) : Extract the product names, quantities and unit prices
+
+##### The codes in this task initially extracts product names, Quantities and Prices from Dataset and create a data-frame such that each order ID is assigned a particular product with corresponding quantity and price.
+
+```{r}
+# Initially we parse out each product, quantity and prices from its character vector.
+
+items_in_order <- raw_orders_coffee[,c("Order_ID","Products","Quantities","Prices")]
+Products_list <- c( )
+Quantities_list <- c( )
+Prices_list <- c( )
+text_parsing_cols <- c("Products","Quantities","Prices")
+for (x in seq(1:length(text_parsing_cols))){
+  columns <- text_parsing_cols[x]
+  parsed_list <- list ( )
+  for (i in seq(1:length(raw_orders_coffee[[columns]]))){
+    parsed_text <- eval(parse(text = raw_orders_coffee[[columns]][i]))
+    parsed_list[[i]] <- parsed_text 
+  }
+  if (columns == "Products")
+    Products_list <- parsed_list
+  else if (columns == "Quantities")
+    Quantities_list <-  parsed_list
+  else
+    Prices_list <- parsed_list
+}
+items_in_order$Products <- Products_list
+items_in_order$Quantities <-  Quantities_list
+items_in_order$Prices <- Prices_list
+items_in_order <-unnest(items_in_order,cols = c("Products","Quantities","Prices"))
+head(items_in_order,10)
+
+#exporting the dataframe to local file.
+#write.csv(items_in_order,file = "D:\\Bangor University\\Courses\\Coding for Business Application\\End Project\\Code Exports\\items in order.csv",row.names = FALSE)
+
+
+
+```
+
+### Task 1(c) : Creation of Orders Dataframe
+
+```{r}
+
+order <- raw_orders_coffee[,c("Order_ID",
+                              "Customer_ID",
+                              "Customer",
+                              "Type",
+                              "Discount_Code",
+                              "Date")]
+order$Prices <- Prices_list
+order$Quantities <- Quantities_list
+order$Sub_total_before_discount <- mapply(function(x,y) sum(x * y),order$Quantities,order$Prices)
+order$Discount_Code[ day(order$Date) == 1 & 
+                    (order$Customer_Membership_Status == "Member")] <- "MEMBER10"
+order <- order %>%
+  mutate(Discount_Value = case_when(Discount_Code == "MEMBER10" ~ Sub_total_before_discount * 0.10,
+                                     Discount_Code == "OFF5"~ Sub_total_before_discount * 0.05,
+                                     TRUE ~ 0 ),
+  Discount_Value = round(Discount_Value,2)
+  )
+order$Sub_total_after_discount <- (order$Sub_total_before_discount - order$Discount_Value)
+order$VAT <- round(order$Sub_total_after_discount * 0.12,2)
+order$Deliveroo_Fee <- 
+  ifelse(order$Type == "Deliveroo", 1.99,no = 0)
+order$final_total <-  order$Sub_total_after_discount + order$VAT + order$Deliveroo_Fee
+order <- order[,c("Order_ID","Customer_ID","Date",
+                  "Type","Discount_Code","Deliveroo_Fee",
+                  "Sub_total_before_discount","Discount_Value",
+                  "Sub_total_after_discount","VAT","final_total")]
+
+for (i in seq(1:length(colnames(order))))
+  if (typeof(order[[i]]) == "double") {
+    order[[i]] <- round(order[[i]],2)
+  }
+head(order,10)
+
+
+
+```
+
+## Task 2 : Function to display desired output
+
+##### For Task 2, a function named "Output" has been created, with input parameters as Customer ID, Start Date & End Date. The Customer input ID needs to be numeric, whereas both Start and End date should be in the format [YYYY-MM-DD]. The function does not accept any other format. The output for the function will return two tables:
+
+##### 1) General Stats Table: This includes Customer's Full Name, Age, Number of Orders within Date ranges, % order from Delivered and Dine In, and Mean/Median of the Order Totals.
+
+##### 2) Product Stats Table: This includes the proportion of every product, customer has ordered within specified date ranges.
+
+```{r,eval=FALSE}
+# firstly we create an additional datafeame to display product history of customer
+customer_order_df <- left_join(items_in_order,y = order,by = "Order_ID")
+customer_order_df <- customer_order_df[,c("Order_ID","Products","Prices","Customer_ID","Date","Quantities")]
+
+# creating a function for desired output.
+
+output <- function(Customer_id_input,Start_Date_input,End_Date_input){
+  Customer_id_input <-readline(prompt = "enter customer ID: ")
+  while(is.na(as.numeric(Customer_id_input)) == TRUE){
+    print("enter a valid numeric Customer ID")
+    Customer_id_input <- readline(prompt = "enter customer ID: ")
+  }
+  Start_Date_input <- as.Date(readline(prompt = "enter Start Date: "),
+                              format = "%Y-%m-%d")
+  while((grepl("^\\d{4}-\\d{2}-\\d{2}$",x = Start_Date_input) == FALSE)){
+    print("enter valid date in [yyyy-mm-dd] format")
+    Start_Date_input <- as.Date(readline(prompt = "enter Start Date: "),
+                                format = "%Y-%m-%d")
+  }
+  End_Date_input <- as.Date(readline(prompt = "enter End Date: "),
+                            format = "%Y-%m-%d")
+  while((grepl("^\\d{4}-\\d{2}-\\d{2}$",x = End_Date_input) == FALSE)){
+    print("enter valid date in [yyyy-mm-dd] format")
+    End_Date_input <- as.Date(readline(prompt = "enter End Date: "),
+                              format = "%Y-%m-%d")
+  }
+  customer_name <- Unique_Customer[Unique_Customer$Customer_ID == Customer_id_input,]
+  order_row <- order[order$Customer_ID == Customer_id_input & 
+  (order$Date >= Start_Date_input & order$Date <=   End_Date_input),]
+  deliveroo_prob <- round((sum(order_row$Type == "Deliveroo")/nrow(order_row)),2)
+  dinein_prob <- round((sum(order_row$Type == "Dine In")/nrow(order_row)),2)
+  order_count <- nrow(order_row)
+  mean_total <- round(mean(order_row$final_total),2)
+  median_total <- round(median(order_row$final_total),2)
+  
+  # table for displaying product proportion in output
+  product_stats <- customer_order_df[customer_order_df$Customer_ID ==      Customer_id_input & (customer_order_df$Date >= Start_Date_input & customer_order_df$Date <=   End_Date_input),]
+  product_stats_data <- product_stats %>%
+  group_by(Products) %>%
+  summarise(order_count = sum(Quantities)) %>%
+  mutate(proportion = order_count/sum(order_count),proportion = percent(proportion)) %>%
+  select(Products,proportion)
+  
+  # table for displaying general customer stats
+    general_stats_data <- data.frame(
+    Customer_Name = paste(customer_name$First_Name,customer_name$Last_Name),
+    Customer_Age = customer_name$Age,
+    Deliveroo_percentage = percent(deliveroo_prob),
+    Dinein_percentage = percent(dinein_prob),
+    Total_order = order_count,
+    Order_mean = mean_total,
+    Order_median = median_total
+  )
+  if (order_count == 0){
+    print("no records to diplay for given date range")
+  }else{
+    print(general_stats_data)
+    print(product_stats_data)
+
+    # ==== RECEIPT OUTPUT ====
+  cat("          BEAN & BREW COFFEE\n")
+  cat("====================================\n")
+  cat("          CUSTOMER RECEIPT\n")
+  cat("====================================\n\n")
+
+  cat("          CUSTOMER DETAILS\n")
+  cat("------------------------------------\n")
+  cat(sprintf("%-20s %s\n", "Name:",            general_stats_data$Customer_Name))
+  cat(sprintf("%-20s %s\n", "Age:",             general_stats_data$Customer_Age))
+  cat(sprintf("%-20s %s\n", "Deliveroo %:",     general_stats_data$Deliveroo_percentage))
+  cat(sprintf("%-20s %s\n", "Dine-in %:",       general_stats_data$Dinein_percentage))
+  cat(sprintf("%-20s %s\n", "Total Orders:",    general_stats_data$Total_order))
+  cat(sprintf("%-20s %s\n", "Mean Order:",      general_stats_data$Order_mean))
+  cat(sprintf("%-20s %s\n", "Median Order:",    general_stats_data$Order_median))
+
+  cat("\n====================================\n")
+  cat("           PRODUCT STATISTICS\n")
+  cat("====================================\n")
+  cat(sprintf("%-20s %s\n", "Product", "Proportion"))
+  cat("------------------------------------\n")
+
+  apply(product_stats_data, 1, function(r) {
+    cat(sprintf("%-20s %s\n", r["Products"], r["proportion"]))
+  })
+
+  cat("====================================\n")
+  cat("           End of Report\n")
+  cat("====================================\n")}
+}
+output(Customer_id_input,Start_Date_input,End_Date_input)
+
+```
+
+## TASK 3 : VISUALIZATION
+
+##### Visualization 1: Column Chart (Age-group wise contribution to Revenue)
+
+```{r}
+# Sales for each month
+monthly_sales <- order %>%
+  group_by(months(Date)) %>%
+  summarise(total = sum(final_total))
+  
+
+age_bins <- cut(x = Unique_Customer$Age,breaks = 3,labels = c("Emerging Adult","Young Adult","Mature Adult"),include.lowest = TRUE)
+
+# sales from each customer ID
+order_by_age <- order %>%
+  group_by(Customer_ID) %>%
+    summarise(total = sum(final_total))
+
+#creating appropriate dataframe for visualization
+vis_data1 <- data.frame(age_group = age_bins,income  = order_by_age$total, 
+                        membership_status = Unique_Customer$Customer_Membership_Status,
+                        monthh = monthly_sales$`months(Date)`)
+
+# grouping by age group, membership_status and month
+vis_data1_summary <- vis_data1 %>%
+  group_by(age_group, membership_status, monthh) %>%
+  summarise(income = sum(income), .groups = "drop")
+
+
+age_plot <- ggplot(data = vis_data1_summary,mapping = aes(x = age_group,y = income,fill = membership_status )) +
+  geom_col(position = "dodge" )+
+  geom_text(aes(label = round(income,0)),colour = "white",size = 3.0,vjust = 1.5,position = position_dodge(0.9))+
+  facet_wrap(~monthh)+
+  labs(title = "Revenue Contibution by Age Group",
+       x ="Age-groups",
+       y = "Total Revenue Contribution",
+       caption = "Emerging Adult : Age (22-31)
+                  Young Adult : Age (32-40)
+                  Mature Adult : Age (41-49)"
+          )+
+  theme_minimal(base_size = 13)+
+  theme(axis.text.x = element_text(size = 8, angle = 50,hjust = 1))
+age_plot
+
+
+
+```
+
+##### The above column bar illustrates the revenue contribution from various age group across four different months. For visualization effectiveness, Customer's age has been classified into three groups, namely Emerging Adult: Age (22-31), Young Adult: Age (22-31) and Mature Adult: Age (41-49). Non-members have dominantly, across every month generated higher revenue than the members. Emerging Adults have consistently contributed highest expect in May. Young and Mature Adults contribute overall less, however, mature adults have overall balanced contribution from members and non-members, compared to other age groups.The overall results show that younger, non-members are generating most of the revenue for the business. This calls for the business to encourage more engagement from its members.Social Media Marketing communicating new offerings, promotion and discounts, can be beneficial for greater engagement (Villanova et al., 2021).
+
+##### Visualization 2: Lorenz Curve of Revenue Inequality & Horizontal Bar of Top Income Contributors
+
+```{r}
+
+# second visualization chart ~ LORENZ CURVE FOR CUSTOMER SPENDING
+lorenz_df <- order %>%
+  group_by(Customer_ID) %>%
+  summarise(total = sum(final_total)) %>%
+  arrange(total) %>%
+  mutate(cum_spend = cumsum(total)/sum(total),
+         cum_pop = row_number()/n( )
+         )
+
+
+lorenz_curve <- ggplot(data = lorenz_df,mapping = aes(x= cum_pop,y = cum_spend))+
+  geom_line(size = 1.0,colour = "red")+
+  geom_abline(intercept = 0,slope = 1,linetype = "dashed")+
+  scale_y_continuous(labels = percent_format( ))+
+  scale_x_continuous(labels = percent_format( ))+
+  labs(title = "Lorenz Curve for Customer Spending",
+       x = "Cumulative share of Customers",
+       y = "Cumulative share of Income")+
+  theme_minimal( )
+  
+
+# Dataframe Creation to identify the VIP Customers
+
+vip_customer <- lorenz_df %>%
+  mutate(rev_contri = total/sum(total)) %>%
+  arrange(desc(rev_contri)) %>%
+  head(10)             
+
+vip_plot <- ggplot(vip_customer, aes(x = reorder(Customer_ID, rev_contri), 
+                                     y = rev_contri)) +
+  geom_col(fill = "steelblue") +
+  geom_text(aes(label = percent(rev_contri, accuracy = 0.02)), 
+            hjust = 1.1, size = 3.0,colour = "white") +
+  coord_flip() +
+  scale_y_continuous(labels = percent_format(accuracy = 0.04)) +
+  labs(title = "Top 10 Revenue Contributors",
+       x = "Customer ID", 
+       y = "Revenue Contribution (%)") +
+  theme_minimal( )
+
+
+lorenz_curve + vip_plot
+
+
+```
+
+##### The second visualization is the combination of two related charts. Initially, we plot a Lorenz curve to demonstrate the revenue inequality among customers. It surprisingly shows that the top 50% revenue generating customers contribute to almost 70% income. Likewise top 10% customers contribute to more than 25% of revenue. Hence, the income generated by coffee shop is highly dependent on certain high-value customers. This reflects the need for business to identify its high income-generating customers, given by the horizontal bar chart alongside Lorenz curve that shows the income(%) contribution by top 10 customers. Customers with Customer ID: 104 and Customer ID: 578 are the highest revenue generator for our business. The business should focus on personal marketing strategies such as loyalty cards and customized orders to retain such high revenue generators.
+
+#### References:
+
+​​3 Data visualisation \| R for Data Science. (n.d.). Retrieved November 19, 2025, from <https://r4ds.had.co.nz/data-visualisation.html> 
+
+​16 Dates and times \| R for Data Science. (n.d.). Retrieved November 19, 2025, from <https://r4ds.had.co.nz/dates-and-times.html> 
+
+​27 R Markdown \| R for Data Science. (n.d.). Retrieved November 19, 2025, from <https://r4ds.had.co.nz/r-markdown.html> 
+
+​Bobit Zach. (2022, March 12). How to Use sprintf Function in R to Print Formatted Strings. <https://www.statology.org/sprintf-function-r/> 
+
+​Chapter 13 The gglot2 Library \| Technical Foundations of Informatics. (n.d.). Retrieved November 19, 2025, from <https://info201.github.io/ggplot2.html> 
+
+​Villanova, D., Bodapati, A. V., Puccinelli, N. M., Tsiros, M., Goodstein, R. C., Kushwaha, T., Suri, R., Ho, H., Brandon, R., & Hatfield, C. (2021). Retailer Marketing Communications in the Digital Age: Getting the Right Message to the Right Shopper at the Right Time. Journal of Retailing, 97(1), 116–132. <https://doi.org/10.1016/J.JRETAI.2021.02.001> 
